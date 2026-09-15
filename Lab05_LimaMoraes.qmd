@@ -1,0 +1,185 @@
+---
+title: "ME315_Lab05"
+author: "João Victor Lima Moraes - 277176"
+format: pdf
+editor: source
+---
+
+## Atividade
+
+Ao longo desta semana, você deverá desenvolver código em R, utilizando-se de tidyverse, ggplot, leaftlet,
+ggcal e outros pacotes disponibilizados em HTML Widgets para responder uma questão relacionada ao conjunto de dados flights. Para tanto, considere os seguintes fatos:
+
+• Cias Aéreas (AIRLINE) possuem diferentes aeronaves (codificadas em TAIL_NUMBER);
+• (Exemplo hipotético) No dia 01/01/2015, a aeronave N431WN viaja de BWI para JFK;
+• (Exemplo hipotético) No dia 02/01/2015, a aeronave N431WN viaja de JFK para ORD‘;
+• E assim sucessivamente. . .
+
+No caso apontado acima, pode-se ver que a aeronave N431WN realizou um trajeto (provavelmente único) durante todo o ano de 2015. Nos dias exemplificados, o trajeto foi BWI-JFK-ORD.
+
+## Parte 1
+
+Crie uma função que:
+
+a. Receba um valor de TAIL_NUMBER (por exemplo, N431WN);
+
+b. Produza uma tabela (tidy) com todos os trajetos realizados pela aeronave (ordenadas por data e hora, contendo todas as colunas do arquivo flights.csv.zip);
+
+c. Produza um mapa que apresente todo o trajeto voado pela aeronave ao longo de todo o ano; o trajeto
+deve ser apresentado de maneira linear no tempo (i.e., segue a sequência do tempo, como no exemplo hipotético dado acima);
+
+d. O mapa deve ser decorado com estatísticas do seu interesse (por exemplo, velocidade média do vôo como espessura da linha que conecta os aeroportos envolvidos no trajeto);
+
+```{r}
+# Pacotes utilizados
+
+library(tidyverse)
+library(leaflet)
+library(scales)
+
+```
+
+
+
+```{r}
+# Função para analisar as aeronaves
+
+analisa_aeronave <- function(tail_number, arquivo) {
+
+  filtra_bloco_da_aeronave <- function(bloco_de_linhas, posicao_no_arquivo) {
+    dplyr::filter(bloco_de_linhas, TAIL_NUMBER == tail_number)
+  }
+
+  voos_da_aeronave <- readr::read_csv_chunked(
+    file       = arquivo,
+    callback   = readr::DataFrameCallback$new(filtra_bloco_da_aeronave),
+    chunk_size = 100000,
+    col_types  = readr::cols(.default = readr::col_guess())
+  )
+
+  if (nrow(voos_da_aeronave) == 0) {
+    stop("Nenhum voo encontrado para a aeronave '", tail_number, "'.")
+  }
+
+  voos_ordenados_no_tempo <- voos_da_aeronave %>%
+    dplyr::mutate(DATA_VOO = lubridate::make_date(YEAR, MONTH, DAY)) %>%
+    dplyr::arrange(DATA_VOO, SCHEDULED_DEPARTURE) %>%
+    dplyr::mutate(ORDEM_DO_VOO = dplyr::row_number())
+
+  caminho_dos_aeroportos <- file.path(dirname(arquivo), "airports.csv")
+
+  if (!file.exists(caminho_dos_aeroportos)) {
+    stop("Arquivo 'airports.csv' não encontrado em: ", caminho_dos_aeroportos)
+  }
+
+  tabela_de_aeroportos <- readr::read_csv(
+    caminho_dos_aeroportos,
+    col_types = readr::cols(
+      IATA_CODE = readr::col_character(),
+      LATITUDE  = readr::col_double(),
+      LONGITUDE = readr::col_double()
+    )
+  )
+
+  voos_com_coordenadas <- voos_ordenados_no_tempo %>%
+    dplyr::left_join(
+      tabela_de_aeroportos %>%
+        dplyr::select(IATA_CODE, LATITUDE_ORIGEM = LATITUDE, LONGITUDE_ORIGEM = LONGITUDE),
+      by = c("ORIGIN_AIRPORT" = "IATA_CODE")
+    ) %>%
+    dplyr::left_join(
+      tabela_de_aeroportos %>%
+        dplyr::select(IATA_CODE, LATITUDE_DESTINO = LATITUDE, LONGITUDE_DESTINO = LONGITUDE),
+      by = c("DESTINATION_AIRPORT" = "IATA_CODE")
+    ) %>%
+    dplyr::filter(!is.na(LATITUDE_ORIGEM), !is.na(LATITUDE_DESTINO))
+
+  tabela_final_para_o_grafico <- voos_com_coordenadas %>%
+    dplyr::mutate(
+      TEMPO_DE_VOO_HORAS   = AIR_TIME / 60,
+      VELOCIDADE_MEDIA_MPH = dplyr::if_else(
+        TEMPO_DE_VOO_HORAS > 0,
+        DISTANCE / TEMPO_DE_VOO_HORAS,
+        NA_real_
+      )
+    )
+
+  paleta_por_ordem_cronologica <- leaflet::colorNumeric(
+    palette = "viridis",
+    domain  = tabela_final_para_o_grafico$ORDEM_DO_VOO
+  )
+
+  espessura_das_linhas <- scales::rescale(
+    tabela_final_para_o_grafico$VELOCIDADE_MEDIA_MPH,
+    to = c(2, 9)
+  )
+
+  mapa_do_trajeto <- leaflet::leaflet(tabela_final_para_o_grafico) %>%
+    leaflet::addProviderTiles(leaflet::providers$CartoDB.Positron) %>%
+    leaflet::addCircleMarkers(
+      lng = ~LONGITUDE_ORIGEM, lat = ~LATITUDE_ORIGEM,
+      radius = 4, color = "black", stroke = FALSE, fillOpacity = 0.8,
+      label = ~ORIGIN_AIRPORT
+    )
+
+  for (indice_do_voo in seq_len(nrow(tabela_final_para_o_grafico))) {
+
+    voo_atual <- tabela_final_para_o_grafico[indice_do_voo, ]
+
+    rotulo_do_voo <- sprintf(
+      "Voo %d/%d | %s -> %s | %s | %.0f mph",
+      voo_atual$ORDEM_DO_VOO,
+      nrow(tabela_final_para_o_grafico),
+      voo_atual$ORIGIN_AIRPORT,
+      voo_atual$DESTINATION_AIRPORT,
+      format(voo_atual$DATA_VOO, "%d/%m/%Y"),
+      voo_atual$VELOCIDADE_MEDIA_MPH
+    )
+
+    mapa_do_trajeto <- mapa_do_trajeto %>%
+      leaflet::addPolylines(
+        lng = c(voo_atual$LONGITUDE_ORIGEM, voo_atual$LONGITUDE_DESTINO),
+        lat = c(voo_atual$LATITUDE_ORIGEM, voo_atual$LATITUDE_DESTINO),
+        color = paleta_por_ordem_cronologica(voo_atual$ORDEM_DO_VOO),
+        weight = espessura_das_linhas[indice_do_voo],
+        opacity = 0.85,
+        label = rotulo_do_voo,
+        popup = rotulo_do_voo
+      )
+  }
+
+  mapa_do_trajeto <- mapa_do_trajeto %>%
+    leaflet::addLegend(
+      position = "bottomright",
+      pal      = paleta_por_ordem_cronologica,
+      values   = tabela_final_para_o_grafico$ORDEM_DO_VOO,
+      title    = "Ordem do voo no ano",
+      opacity  = 0.9
+    )
+
+  return(list(
+    tabela = tabela_final_para_o_grafico,
+    mapa   = mapa_do_trajeto
+  ))
+}
+```
+
+
+```{r}
+# Exemplo prático 
+
+resultado <- analisa_aeronave(
+  tail_number = "N431WN",
+  arquivo  = file.path("flights.csv.zip")
+)
+
+resultado$tabela
+resultado$mapa
+```
+
+
+```{r}
+Sys.setenv(TZ = "America/Sao_Paulo")
+Sys.time()
+```
+
