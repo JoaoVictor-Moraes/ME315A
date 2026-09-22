@@ -1,0 +1,141 @@
+---
+title: "ME315_Lab07"
+author: "João Victor Lima Moraes - 277176"
+format: pdf
+editor: source
+---
+
+## Atividade
+
+1.  Baixe o arquivo uwmadison.sqlite3. Conecte-se a ele usando o pacote RSQLite, armazenando a conexão em uma variável conn.
+
+```{r}
+library(RSQLite)
+library(DBI)
+
+conn <- dbConnect(RSQLite::SQLite(), "uwmadison.sqlite3")
+dbListTables(conn)
+```
+
+
+2.  Quem são e quantos são os professores que lecionaram disciplinas cujo tópico era estatística (subjects.abbreviation='STAT');
+
+```{sql connection=conn}
+-- Quem são os professores que lecionaram disciplinas de estatística
+
+SELECT DISTINCT i.id, i.name FROM instructors i
+INNER JOIN teachings t            ON t.instructor_id = i.id
+INNER JOIN sections s             ON s.uuid = t.section_uuid
+INNER JOIN course_offerings co    ON co.uuid = s.course_offering_uuid
+INNER JOIN subject_memberships sm ON sm.course_offering_uuid = co.uuid
+INNER JOIN subjects sub           ON sub.code = sm.subject_code
+WHERE sub.abbreviation = 'STAT'
+
+```
+
+
+```{sql connection=conn}
+-- Quantos são os professores que lecionaram disciplinas de estatística
+
+SELECT COUNT(DISTINCT i.id) AS qtd_professores
+FROM instructors i
+INNER JOIN teachings t            ON t.instructor_id = i.id
+INNER JOIN sections s             ON s.uuid = t.section_uuid
+INNER JOIN course_offerings co    ON co.uuid = s.course_offering_uuid
+INNER JOIN subject_memberships sm ON sm.course_offering_uuid = co.uuid
+INNER JOIN subjects sub           ON sub.code = sm.subject_code
+WHERE sub.abbreviation = 'STAT'
+
+```
+
+
+3.  O GPA americano é definido numa escala de 0 a 4, em que A = 4, AB = 3.5, B = 3, BC = 2.5, C = 2, D = 1 e F = 0. Determinando a nota média de cada oferecimento pela ponderação da quantidade de alunos em cada extrato com os valores numéricos de cada conceito, indique (no que se referente a disciplinas no assunto de estatística):
+
+Quem é o professor mais difícil?
+Quem é o professor mais fácil?
+Qual é a disciplina mais difícil?
+Qual é a disciplina mais fácil?
+
+```{sql connection=conn}
+
+CREATE TABLE gpa_por_oferta AS
+SELECT
+  co.uuid AS course_offering_uuid,
+  co.name AS disciplina,
+  i.id    AS instructor_id,
+  i.name  AS professor,
+  SUM(gd.a_count)*4.0 + SUM(gd.ab_count)*3.5 + SUM(gd.b_count)*3.0 +
+    SUM(gd.bc_count)*2.5 + SUM(gd.c_count)*2.0 + SUM(gd.d_count)*1.0 +
+    SUM(gd.f_count)*0.0 AS soma_pontos,
+  SUM(gd.a_count) + SUM(gd.ab_count) + SUM(gd.b_count) + SUM(gd.bc_count) +
+    SUM(gd.c_count) + SUM(gd.d_count) + SUM(gd.f_count) AS total_alunos
+FROM grade_distributions gd
+INNER JOIN sections s             ON s.uuid = gd.course_offering_uuid
+INNER JOIN course_offerings co    ON co.uuid = s.course_offering_uuid
+INNER JOIN subject_memberships sm ON sm.course_offering_uuid = co.uuid
+INNER JOIN subjects sub           ON sub.code = sm.subject_code
+INNER JOIN teachings t            ON t.section_uuid = s.uuid
+INNER JOIN instructors i          ON i.id = t.instructor_id
+WHERE sub.abbreviation = 'STAT'
+GROUP BY co.uuid, i.id
+HAVING total_alunos > 0
+```
+
+
+```{sql connection=conn}
+
+SELECT professor,
+       SUM(soma_pontos) / SUM(total_alunos) AS gpa_medio FROM gpa_por_oferta
+GROUP BY professor
+ORDER BY gpa_medio ASC
+LIMIT 1
+
+```
+
+
+```{sql connection=conn}
+-- Professor mais fácil
+SELECT professor,
+       SUM(soma_pontos) / SUM(total_alunos) AS gpa_medio FROM gpa_por_oferta
+GROUP BY professor
+ORDER BY gpa_medio DESC
+LIMIT 1
+
+```
+
+
+```{sql connection=conn}
+-- Disciplina mais difícil
+SELECT disciplina,
+       SUM(soma_pontos) / SUM(total_alunos) AS gpa_medio FROM gpa_por_oferta
+GROUP BY disciplina
+ORDER BY gpa_medio ASC
+LIMIT 1
+
+```
+
+
+```{sql connection=conn}
+-- Disciplina mais fácil
+SELECT disciplina,
+       SUM(soma_pontos) / SUM(total_alunos) AS gpa_medio
+FROM gpa_por_oferta
+GROUP BY disciplina
+ORDER BY gpa_medio DESC
+LIMIT 1
+
+```
+
+
+4.  Desconecte do banco de dados.
+
+```{r}
+dbDisconnect(conn)
+```
+
+
+```{r}
+Sys.setenv(TZ = "America/Sao_Paulo")
+Sys.time()
+```
+
